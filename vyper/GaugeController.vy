@@ -15,6 +15,7 @@ token: address  # CRV token
 # All numbers are "fixed point" on the basis of 1e18
 n_gauge_types: public(int128)
 n_gauges: public(int128)
+n_nonzero_gauges: public(int128)
 
 gauges: public(map(int128, address))
 gauge_types: public(map(address, int128))
@@ -34,6 +35,7 @@ def __init__(token_address: address):
     self.token = token_address
     self.n_gauge_types = 0
     self.n_gauges = 0
+    self.n_nonzero_gauges = 0
     self.total_weight = 0
     self.last_change = block.timestamp
     self.start_epoch_time = CRV20(token_address).start_epoch_time_write()
@@ -69,6 +71,7 @@ def add_gauge(addr: address, gauge_type: int128, weight: uint256 = 0):
     self.gauge_weights[addr] = weight
 
     if weight > 0:
+        self.n_nonzero_gauges += 1
         self.weight_sums_per_type[gauge_type] += weight
         self.total_weight += self.type_weights[gauge_type] * weight
         self.last_change = block.timestamp
@@ -107,6 +110,9 @@ def change_gauge_weight(addr: address, weight: uint256):
     old_weight_sums: uint256 = self.weight_sums_per_type[gauge_type]
     old_total_weight: uint256 = self.total_weight
     old_weight: uint256 = self.gauge_weights[addr]
+
+    if (weight == 0) and (old_weight > 0):
+        self.n_nonzero_gauges -= 1
 
     weight_sums: uint256 = old_weight_sums + weight - old_weight
     self.gauge_weights[addr] = weight
