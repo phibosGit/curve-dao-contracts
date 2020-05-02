@@ -2,7 +2,7 @@ from random import random, randrange
 from .conftest import YEAR, time_travel, block_timestamp, approx
 
 
-def test_gauge_integral(w3, mock_lp_token, token, liquidity_gauge):
+def test_gauge_integral(w3, mock_lp_token, token, liquidity_gauge, gauge_controller):
     alice, bob = w3.eth.accounts[:2]
     from_alice = {'from': alice}
     from_bob = {'from': bob}
@@ -13,6 +13,11 @@ def test_gauge_integral(w3, mock_lp_token, token, liquidity_gauge):
     checkpoint_rate = token.caller.rate()
     checkpoint_supply = 0
     checkpoint_balance = 0
+
+    # Add to controller to have rate = 1
+    gauge_controller.functions.add_type().transact(from_alice)
+    gauge_controller.functions.change_type_weight(0, 10 ** 18).transact(from_alice)
+    gauge_controller.functions.add_gauge(liquidity_gauge.address, 0, 10 ** 18).transact(from_alice)
 
     # Let Alice and Bob have about the same token amount
     mock_lp_token.functions.transfer(

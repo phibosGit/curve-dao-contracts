@@ -33,7 +33,8 @@ integrate_checkpoint_of: map(address, timestamp)
 # ∫(balance * rate(t) / totalSupply(t) dt) from 0 till checkpoint
 integrate_fraction: public(map(address, uint256))
 
-inflation_rate: uint256
+inflation_rate: uint256  # Total inflation rate
+weighted_rate: uint256  # inflation_rate * weight
 
 # XXX also set_weight_fraction and integrate with * (weight / sum(all_weights))
 
@@ -48,7 +49,9 @@ def __init__(crv_addr: address, lp_addr: address, controller_addr: address):
     self.integrate_inv_supply[0] = 0
     self.period_checkpoints[0] = CRV20(crv_addr).start_epoch_time_write()
     self.last_period= 0
-    self.inflation_rate = CRV20(crv_addr).rate()
+    # We don't know our address in advance, hence the gauge is not added and
+    # the fraction is 0
+    self.inflation_rate = 0
 
 
 @private
@@ -56,8 +59,10 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
     _integrate_checkpoint: timestamp = self.integrate_checkpoint
     if block.timestamp > _integrate_checkpoint:
         _token: address = self.crv_token
+        _controller: address = self.controller
         period: int128 = self.last_period
         new_epoch_time: timestamp = CRV20(_token).start_epoch_time_write()
+        weight_change_time: timestamp = Controller(_controller).last_change()
         _integrate_inv_supply: uint256 = self.integrate_inv_supply[period]
         rate: uint256 = self.inflation_rate
 
@@ -69,7 +74,7 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
             dt = as_unitless_number(new_epoch_time - _integrate_checkpoint)
             _integrate_inv_supply += 10 ** 18 * rate * dt / old_supply
             self.integrate_inv_supply[period] = _integrate_inv_supply
-            rate = CRV20(_token).rate()
+            rate = CRV20(_token).rate() * Controller(_controller).gauge_relative_weight(self) / 10 ** 18
             self.inflation_rate = rate
             period += 1
             self.last_period = period
