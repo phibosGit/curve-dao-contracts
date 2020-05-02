@@ -6,8 +6,8 @@ contract CRV20:
     def rate() -> uint256: constant
 
 contract Controller:
-    def last_change_write() -> uint256: modifying
     def gauge_relative_weight(addr: address) -> uint256: constant
+    def last_change() -> timestamp: constant
 
 
 crv_token: public(address)
@@ -18,7 +18,7 @@ totalSupply: public(uint256)
 
 # The goal is to be able to calculate ∫(rate * balance / totalSupply dt) from 0 till checkpoint
 # All values are kept in units of being multiplied by 1e18
-epoch_checkpoints: map(int128, timestamp) # Beginning of the epoch
+period_checkpoints: map(int128, timestamp) # Beginning of the epoch
 last_epoch: int128
 
 # 1e18 * ∫(rate(t) / totalSupply(t) dt) from 0 till checkpoint
@@ -46,7 +46,7 @@ def __init__(crv_addr: address, lp_addr: address, controller_addr: address):
     self.totalSupply = 0
     self.integrate_checkpoint = block.timestamp
     self.integrate_inv_supply[0] = 0
-    self.epoch_checkpoints[0] = CRV20(crv_addr).start_epoch_time_write()
+    self.period_checkpoints[0] = CRV20(crv_addr).start_epoch_time_write()
     self.last_epoch = 0
     self.inflation_rate = CRV20(crv_addr).rate()
 
@@ -73,7 +73,7 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
             self.inflation_rate = rate
             epoch += 1
             self.last_epoch = epoch
-            self.epoch_checkpoints[epoch] = new_epoch_time
+            self.period_checkpoints[epoch] = new_epoch_time
             dt = as_unitless_number(block.timestamp - new_epoch_time)
         else:
             dt = as_unitless_number(block.timestamp - _integrate_checkpoint)
@@ -104,7 +104,7 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
                     prev_epoch_inv_supply: uint256 = self.integrate_inv_supply[user_epoch]
                     dI: uint256 = _epoch_inv_supply - prev_epoch_inv_supply
                     _epoch_inv_supply = prev_epoch_inv_supply
-                    user_epoch_time = self.epoch_checkpoints[user_epoch]
+                    user_epoch_time = self.period_checkpoints[user_epoch]
                     _integrate_fraction += old_value * dI / 10 ** 18
 
             self.integrate_inv_supply_of[addr] = _integrate_inv_supply
