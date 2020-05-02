@@ -14,13 +14,18 @@ def test_gauge_controller(w3, gauge_controller, liquidity_gauge, three_gauges, t
 
     gauge_controller.functions.add_gauge(three_gauges[0].address, 0).transact(from_admin)
     gauge_controller.functions.add_gauge(three_gauges[1].address, 0, gauge_weights[1]).transact(from_admin)
+    # Don't have to care about [0] b/c it's 0 weight
     gauge_controller.functions.add_gauge(three_gauges[2].address, 1, gauge_weights[2]).transact(from_admin)
+    # Have to checkpoint [1]
+    gauge_controller.functions.checkpoint_gauge(three_gauges[1].address).transact(from_admin)
 
     gauge_controller.functions.change_type_weight(1, type_weights[1]).transact(from_admin)
+    gauge_controller.functions.checkpoint_all_gauges().transact(from_admin)
 
     gauge_controller.functions.change_gauge_weight(three_gauges[0].address, gauge_weights[0]).transact(from_admin)
-
     last_change = block_timestamp(w3)
+    gauge_controller.functions.checkpoint_all_gauges().transact(from_admin)
+
     assert last_change == gauge_controller.caller.last_change()
 
     # Check static parameters

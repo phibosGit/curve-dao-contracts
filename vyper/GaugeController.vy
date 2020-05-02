@@ -15,13 +15,14 @@ token: address  # CRV token
 # All numbers are "fixed point" on the basis of 1e18
 n_gauge_types: public(int128)
 n_gauges: public(int128)
-n_nonzero_gauges: public(int128)
 
 gauges: public(map(int128, address))
 gauge_types: public(map(address, int128))
 gauge_weights: public(map(address, uint256))
 
-gauges_last_checkpoint: public(map(address, timestamp))  # ? several
+n_nonzero_gauges: public(int128)
+n_nonupdated_gauges: public(int128)
+gauges_last_checkpoint: public(map(address, timestamp))
 
 type_weights: public(map(int128, uint256))
 weight_sums_per_type: public(map(int128, uint256))
@@ -60,6 +61,7 @@ def add_type():
 def add_gauge(addr: address, gauge_type: int128, weight: uint256 = 0):
     assert msg.sender == self.admin
     assert (gauge_type >= 0) and (gauge_type < self.n_gauge_types)
+    assert self.n_nonupdated_gauges <= 0  # Cannot be <0 but...
     # If someone adds the same gauge twice, it will override the previous one
     # That's probably ok
 
@@ -71,10 +73,14 @@ def add_gauge(addr: address, gauge_type: int128, weight: uint256 = 0):
     self.gauge_weights[addr] = weight
 
     if weight > 0:
+        # Same timestamp change == vulnerability
+        assert self.last_change != block.timestamp
+        self.last_change = block.timestamp
+        self.gauges_last_checkpoint[addr] = block.timestamp
+        self.n_nonupdated_gauges = self.n_nonzero_gauges
         self.n_nonzero_gauges += 1
         self.weight_sums_per_type[gauge_type] += weight
         self.total_weight += self.type_weights[gauge_type] * weight
-        self.last_change = block.timestamp
 
 
 @public
@@ -90,6 +96,7 @@ def gauge_relative_weight(addr: address) -> uint256:
 @public
 def change_type_weight(type_id: int128, weight: uint256):
     assert msg.sender == self.admin
+    assert self.n_nonupdated_gauges <= 0  # Cannot be <0 but...
 
     old_weight: uint256 = self.type_weights[type_id]
     old_total_weight: uint256 = self.total_weight
@@ -98,12 +105,17 @@ def change_type_weight(type_id: int128, weight: uint256):
     self.total_weight = old_total_weight + _weight_sums_per_type * weight - _weight_sums_per_type * old_weight
     self.type_weights[type_id] = weight
 
+    self.n_nonupdated_gauges = self.n_nonzero_gauges
+
+    # Same timestamp change == vulnerability
+    assert self.last_change != block.timestamp
     self.last_change = block.timestamp
 
 
 @public
 def change_gauge_weight(addr: address, weight: uint256):
     assert msg.sender == self.admin
+    assert self.n_nonupdated_gauges <= 0  # Cannot be <0 but...
 
     gauge_type: int128 = self.gauge_types[addr]
     type_weight: uint256 = self.type_weights[gauge_type]
@@ -119,9 +131,39 @@ def change_gauge_weight(addr: address, weight: uint256):
     self.weight_sums_per_type[gauge_type] = weight_sums
     self.total_weight = old_total_weight + weight_sums * type_weight - old_weight_sums * type_weight
 
+    self.n_nonupdated_gauges = self.n_nonzero_gauges - 1
+    self.gauges_last_checkpoint[addr] = block.timestamp
+    # Same timestamp change == vulnerability
+    assert self.last_change != block.timestamp
     self.last_change = block.timestamp
+
+
+@private
+def _checkpoint_gauge(addr: address):
+    # Everyone can and encouraged to do it
+    checkpoint: timestamp = self.gauges_last_checkpoint[addr]
+    _last_change: timestamp = self.last_change
+    if checkpoint != _last_change:
+        self.gauges_last_checkpoint[addr] = _last_change
+        if self.gauge_weights[addr] > 0:
+            self.n_nonupdated_gauges -= 1
+            # Still ok to checkpoint if zero
+        # XXX call something to _actually_ checkpoint it in the gauge
 
 
 @public
 def checkpoint_gauge(addr: address):
-    pass
+    self._checkpoint_gauge(addr)
+
+
+@public
+def checkpoint_all_gauges():
+    # Will work only until certain number of pools * gauges
+    # After that's too much - checkpoint_gauge() can be used
+    _n_gauges: int128 = self.n_gauges
+    for i in range(1000):
+        addr: address = self.gauges[i]
+        if self.gauge_weights[addr] > 0:
+            self._checkpoint_gauge(addr)
+        if i >= _n_gauges:
+            break
