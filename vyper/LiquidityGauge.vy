@@ -19,7 +19,7 @@ totalSupply: public(uint256)
 # The goal is to be able to calculate ∫(rate * balance / totalSupply dt) from 0 till checkpoint
 # All values are kept in units of being multiplied by 1e18
 period_checkpoints: map(int128, timestamp) # Beginning of the epoch
-last_epoch: int128
+last_period: int128
 
 # 1e18 * ∫(rate(t) / totalSupply(t) dt) from 0 till checkpoint
 integrate_inv_supply: map(int128, uint256)  # bump epoch when rate() changes
@@ -47,7 +47,7 @@ def __init__(crv_addr: address, lp_addr: address, controller_addr: address):
     self.integrate_checkpoint = block.timestamp
     self.integrate_inv_supply[0] = 0
     self.period_checkpoints[0] = CRV20(crv_addr).start_epoch_time_write()
-    self.last_epoch = 0
+    self.last_period= 0
     self.inflation_rate = CRV20(crv_addr).rate()
 
 
@@ -56,9 +56,9 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
     _integrate_checkpoint: timestamp = self.integrate_checkpoint
     if block.timestamp > _integrate_checkpoint:
         _token: address = self.crv_token
-        epoch: int128 = self.last_epoch
+        period: int128 = self.last_period
         new_epoch_time: timestamp = CRV20(_token).start_epoch_time_write()
-        _integrate_inv_supply: uint256 = self.integrate_inv_supply[epoch]
+        _integrate_inv_supply: uint256 = self.integrate_inv_supply[period]
         rate: uint256 = self.inflation_rate
 
         dt: uint256 = 0
@@ -68,12 +68,12 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
             # No less than one checkpoint is expected in 1 year
             dt = as_unitless_number(new_epoch_time - _integrate_checkpoint)
             _integrate_inv_supply += 10 ** 18 * rate * dt / old_supply
-            self.integrate_inv_supply[epoch] = _integrate_inv_supply
+            self.integrate_inv_supply[period] = _integrate_inv_supply
             rate = CRV20(_token).rate()
             self.inflation_rate = rate
-            epoch += 1
-            self.last_epoch = epoch
-            self.period_checkpoints[epoch] = new_epoch_time
+            period += 1
+            self.last_period = period
+            self.period_checkpoints[period] = new_epoch_time
             dt = as_unitless_number(block.timestamp - new_epoch_time)
         else:
             dt = as_unitless_number(block.timestamp - _integrate_checkpoint)
@@ -86,7 +86,7 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
 
         # Update user-specific integrals
         if addr != ZERO_ADDRESS:
-            user_epoch: int128 = epoch
+            user_period: int128 = period
             user_epoch_time: timestamp = new_epoch_time
             user_checkpoint: timestamp = self.integrate_checkpoint_of[addr]
             _epoch_inv_supply: uint256 = _integrate_inv_supply
@@ -100,18 +100,18 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
                     _integrate_fraction += old_value * dI / 10 ** 18
                     break
                 else:
-                    user_epoch -= 1
-                    prev_epoch_inv_supply: uint256 = self.integrate_inv_supply[user_epoch]
+                    user_period -= 1
+                    prev_epoch_inv_supply: uint256 = self.integrate_inv_supply[user_period]
                     dI: uint256 = _epoch_inv_supply - prev_epoch_inv_supply
                     _epoch_inv_supply = prev_epoch_inv_supply
-                    user_epoch_time = self.period_checkpoints[user_epoch]
+                    user_epoch_time = self.period_checkpoints[user_period]
                     _integrate_fraction += old_value * dI / 10 ** 18
 
             self.integrate_inv_supply_of[addr] = _integrate_inv_supply
             self.integrate_fraction[addr] = _integrate_fraction
             self.integrate_checkpoint_of[addr] = block.timestamp
 
-        self.integrate_inv_supply[epoch] = _integrate_inv_supply
+        self.integrate_inv_supply[period] = _integrate_inv_supply
         self.integrate_checkpoint = block.timestamp
 
 
