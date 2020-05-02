@@ -25,7 +25,7 @@ last_epoch: int128
 integrate_inv_supply: map(int128, uint256)  # bump epoch when rate() changes
 integrate_checkpoint: timestamp
 
-# 1e18 * ∫(rate(t) / totalSupply(t) dt) from (last_action) till checkpoint
+# 1e18 * ∫(rate(t) / totalSupply(t) dt) from 0 till individual checkpoint
 integrate_inv_supply_of: map(address, uint256)
 integrate_checkpoint_of: map(address, timestamp)
 
@@ -85,37 +85,44 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
             _integrate_inv_supply += 10 ** 18 * rate * dt / old_supply
 
         # Update user-specific integrals
-        user_epoch: int128 = epoch
-        user_epoch_time: timestamp = new_epoch_time
-        user_checkpoint: timestamp = self.integrate_checkpoint_of[addr]
-        _epoch_inv_supply: uint256 = _integrate_inv_supply
-        _integrate_inv_supply_of: uint256 = self.integrate_inv_supply_of[addr]
-        _integrate_fraction: uint256 = self.integrate_fraction[addr]
-        for i in range(999):
-            # Going no more than 999 epochs (years?) (usually much less)
-            if user_checkpoint >= user_epoch_time:
-                # Last cycle => we are in the epoch of the user checkpoint
-                dI: uint256 = _epoch_inv_supply - _integrate_inv_supply_of
-                _integrate_fraction += old_value * dI / 10 ** 18
-                break
-            else:
-                user_epoch -= 1
-                prev_epoch_inv_supply: uint256 = self.integrate_inv_supply[user_epoch]
-                dI: uint256 = _epoch_inv_supply - prev_epoch_inv_supply
-                _epoch_inv_supply = prev_epoch_inv_supply
-                user_epoch_time = self.epoch_checkpoints[user_epoch]
-                _integrate_fraction += old_value * dI / 10 ** 18
+        if addr != ZERO_ADDRESS:
+            user_epoch: int128 = epoch
+            user_epoch_time: timestamp = new_epoch_time
+            user_checkpoint: timestamp = self.integrate_checkpoint_of[addr]
+            _epoch_inv_supply: uint256 = _integrate_inv_supply
+            _integrate_inv_supply_of: uint256 = self.integrate_inv_supply_of[addr]
+            _integrate_fraction: uint256 = self.integrate_fraction[addr]
+            for i in range(999):
+                # Going no more than 999 epochs (years?) (usually much less)
+                if user_checkpoint >= user_epoch_time:
+                    # Last cycle => we are in the epoch of the user checkpoint
+                    dI: uint256 = _epoch_inv_supply - _integrate_inv_supply_of
+                    _integrate_fraction += old_value * dI / 10 ** 18
+                    break
+                else:
+                    user_epoch -= 1
+                    prev_epoch_inv_supply: uint256 = self.integrate_inv_supply[user_epoch]
+                    dI: uint256 = _epoch_inv_supply - prev_epoch_inv_supply
+                    _epoch_inv_supply = prev_epoch_inv_supply
+                    user_epoch_time = self.epoch_checkpoints[user_epoch]
+                    _integrate_fraction += old_value * dI / 10 ** 18
+
+            self.integrate_inv_supply_of[addr] = _integrate_inv_supply
+            self.integrate_fraction[addr] = _integrate_fraction
+            self.integrate_checkpoint_of[addr] = block.timestamp
 
         self.integrate_inv_supply[epoch] = _integrate_inv_supply
-        self.integrate_inv_supply_of[addr] = _integrate_inv_supply
-        self.integrate_fraction[addr] = _integrate_fraction
-        self.integrate_checkpoint_of[addr] = block.timestamp
         self.integrate_checkpoint = block.timestamp
 
 
 @public
 def user_checkpoint():
     self._checkpoint(msg.sender, self.balanceOf[msg.sender], self.totalSupply)
+
+
+@public
+def checkpoint():
+    self._checkpoint(ZERO_ADDRESS, 0, self.totalSupply)
 
 
 @public
