@@ -36,7 +36,7 @@ def __init__(token_addr: address):
 
 
 @private
-def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
+def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBalance):
     pass
 
 
@@ -55,13 +55,14 @@ def deposit(value: uint256, unlock_time: timestamp = 0):
             assert unlock_time >= _locked.before, "Cannot make locktime smaller"
         assert unlock_time > block.timestamp, "Can only lock until time in the future"
 
-    self._checkpoint(msg.sender, _locked.amount, old_supply)
-
+    old_locked: LockedBalance = _locked
     self.supply = old_supply + value
     _locked.amount += value
     if unlock_time > 0:
         _locked.before = unlock_time
     self.locked[msg.sender] = _locked
+
+    self._checkpoint(msg.sender, old_locked, _locked)
 
     if value > 0:
         assert_modifiable(ERC20(self.token).transferFrom(msg.sender, self, value))
@@ -75,10 +76,11 @@ def withdraw(value: uint256):
     assert block.timestamp >= _locked.before
     old_supply: uint256 = self.supply
 
-    self._checkpoint(msg.sender, _locked.amount, old_supply)
-
+    old_locked: LockedBalance = _locked
     _locked.amount -= value
     self.supply = old_supply - value
+
+    self._checkpoint(msg.sender, old_locked, _locked)
 
     assert_modifiable(ERC20(self.token).transfer(msg.sender, value))
     # XXX logs
