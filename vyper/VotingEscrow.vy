@@ -19,7 +19,8 @@ struct Point:
 
 struct LockedBalance:
     amount: uint256
-    before: uint256
+    begin: uint256
+    end: uint256
 
 
 WEEK: constant(uint256) = 7 * 86400  # All future times rounded by week
@@ -41,7 +42,17 @@ def __init__(token_addr: address):
 
 @private
 def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBalance):
-    pass
+    old_user_bias: uint256 = 0
+    old_user_slope: uint256 = 0
+    new_user_bias: uint256 = 0
+    new_user_slope: uint256 = 0
+    ts: uint256 = as_unitless_number(block.timestamp)
+    if old_locked.amount > 0 and old_locked.end > block.timestamp and old_locked.end > old_locked.begin:
+        old_user_slope = 10 ** 18 * old_locked.amount / (old_locked.end - old_locked.begin)
+        old_user_bias = old_user_slope * (old_locked.end - ts) / 10 ** 18
+    if new_locked.amount > 0 and new_locked.end > block.timestamp and new_locked.end > new_locked.begin:
+        new_user_slope = 10 ** 18 * new_locked.amount / (new_locked.end - new_locked.begin)
+        new_user_bias = new_user_slope * (new_locked.end - ts) / 10 ** 18
 
 
 @public
@@ -54,17 +65,22 @@ def deposit(value: uint256, _unlock_time: uint256 = 0):
 
     if unlock_time == 0:
         assert _locked.amount > 0, "No existing stake found"
-        assert _locked.before> block.timestamp, "Time to unstake"
+        assert _locked.end > block.timestamp, "Time to unstake"
+        assert value > 0
     else:
         if _locked.amount > 0:
-            assert unlock_time >= _locked.before, "Cannot make locktime smaller"
+            assert unlock_time >= _locked.end, "Cannot make locktime smaller"
+        else:
+            assert value > 0
         assert unlock_time > block.timestamp, "Can only lock until time in the future"
 
     old_locked: LockedBalance = _locked
+    if _locked.amount == 0:
+        _locked.begin = as_unitless_number(block.timestamp)
     self.supply = old_supply + value
     _locked.amount += value
     if unlock_time > 0:
-        _locked.before = unlock_time
+        _locked.end = unlock_time
     self.locked[msg.sender] = _locked
     self.locked_history[msg.sender][as_unitless_number(block.timestamp)] = _locked
 
@@ -79,7 +95,7 @@ def deposit(value: uint256, _unlock_time: uint256 = 0):
 @nonreentrant('lock')
 def withdraw(value: uint256):
     _locked: LockedBalance = self.locked[msg.sender]
-    assert block.timestamp >= _locked.before
+    assert block.timestamp >= _locked.end
     old_supply: uint256 = self.supply
 
     old_locked: LockedBalance = _locked
