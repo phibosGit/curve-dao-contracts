@@ -16,6 +16,7 @@ from vyper.interfaces import ERC20
 struct Point:
     bias: uint256
     slope: uint256  # - dweight / dt * 1e18
+    # upper bit in slope is reserved for the sign
 
 struct LockedBalance:
     amount: uint256
@@ -24,6 +25,7 @@ struct LockedBalance:
 
 
 WEEK: constant(uint256) = 7 * 86400  # All future times rounded by week
+UINT256_SIGN: constant(uint256) = 2 ** 255  # Ugh, I wish there was int256
 
 token: public(address)
 supply: public(uint256)
@@ -31,13 +33,15 @@ supply: public(uint256)
 locked: public(map(address, LockedBalance))
 locked_history: public(map(address, map(uint256, LockedBalance)))
 
-checkpoints: public(map(uint256, Point))
+point_history: public(map(uint256, Point))  # time -> unsigned point
+point_changes: public(map(uint256, Point))  # time -> point
 last_checkpoint: uint256
 
 
 @public
 def __init__(token_addr: address):
     self.token = token_addr
+    self.last_checkpoint = as_unitless_number(block.timestamp)
 
 
 @private
@@ -47,12 +51,27 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     new_user_bias: uint256 = 0
     new_user_slope: uint256 = 0
     ts: uint256 = as_unitless_number(block.timestamp)
+    old_end_change: Point = Point({slope: 0, bias: 0})
+    new_end_change: Point = Point({slope: 0, bias: 0})
     if old_locked.amount > 0 and old_locked.end > block.timestamp and old_locked.end > old_locked.begin:
         old_user_slope = 10 ** 18 * old_locked.amount / (old_locked.end - old_locked.begin)
         old_user_bias = old_user_slope * (old_locked.end - ts) / 10 ** 18
     if new_locked.amount > 0 and new_locked.end > block.timestamp and new_locked.end > new_locked.begin:
         new_user_slope = 10 ** 18 * new_locked.amount / (new_locked.end - new_locked.begin)
         new_user_bias = new_user_slope * (new_locked.end - ts) / 10 ** 18
+
+    # Some workaround for not having signed int256...
+    old_end_change = self.point_changes[old_locked.end]
+    old_bias_sign: bool = (bitwise_and(old_end_change.bias, UINT256_SIGN) > 0)
+    old_slope_sign: bool = (bitwise_and(old_end_change.slope, UINT256_SIGN) > 0)
+    new_bias_sign: bool = old_bias_sign
+    new_slope_sign: bool = old_slope_sign
+    if new_locked.end != old_locked.end:
+        new_end_change = self.point_changes[new_locked.end]
+        new_bias_sign = (bitwise_and(new_end_change.bias, UINT256_SIGN) > 0)
+        new_slope_sign = (bitwise_and(new_end_change.slope, UINT256_SIGN) > 0)
+    else:
+        new_end_change = old_end_change
 
 
 @public
