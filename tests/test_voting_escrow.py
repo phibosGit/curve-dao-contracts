@@ -20,6 +20,8 @@ def test_escrow_desposit_withdraw(w3, token, voting_escrow):
         voting_escrow.functions.withdraw(alice_amount).transact(from_alice)
     time_travel(w3, 2 * WEEK)
     voting_escrow.functions.withdraw(alice_amount).transact(from_alice)
+    with pytest.raises(TransactionFailed):
+        voting_escrow.functions.withdraw(1).transact(from_alice)
 
     # Deposit, add more, withdraw all
     alice_unlock_time = block_timestamp(w3) + 2 * WEEK
