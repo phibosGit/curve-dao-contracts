@@ -34,7 +34,7 @@ locked: public(map(address, LockedBalance))
 locked_history: public(map(address, map(uint256, LockedBalance)))
 
 point_history: public(map(uint256, Point))  # time -> unsigned point
-point_changes: public(map(uint256, Point))  # time -> point
+slope_changes: public(map(uint256, uint256))  # time -> signed slope change
 last_checkpoint: uint256
 
 
@@ -51,8 +51,8 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     new_user_bias: uint256 = 0
     new_user_slope: uint256 = 0
     ts: uint256 = as_unitless_number(block.timestamp)
-    old_end_change: Point = Point({slope: 0, bias: 0})
-    new_end_change: Point = Point({slope: 0, bias: 0})
+    old_end_change: uint256 = 0
+    new_end_change: uint256 = 0
     if old_locked.amount > 0 and old_locked.end > block.timestamp and old_locked.end > old_locked.begin:
         old_user_slope = 10 ** 18 * old_locked.amount / (old_locked.end - old_locked.begin)
         old_user_bias = old_user_slope * (old_locked.end - ts) / 10 ** 18
@@ -61,17 +61,59 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         new_user_bias = new_user_slope * (new_locked.end - ts) / 10 ** 18
 
     # Some workaround for not having signed int256...
+    # old_end_change and new_end_change are signed changes in slope
     old_end_change = self.point_changes[old_locked.end]
-    old_bias_sign: bool = (bitwise_and(old_end_change.bias, UINT256_SIGN) > 0)
-    old_slope_sign: bool = (bitwise_and(old_end_change.slope, UINT256_SIGN) > 0)
-    new_bias_sign: bool = old_bias_sign
-    new_slope_sign: bool = old_slope_sign
+    old_end_sign: bool = (bitwise_and(old_end_change, UINT256_SIGN) == 0)
+    new_end_sign: bool = old_end_sign
     if new_locked.end != old_locked.end:
         new_end_change = self.point_changes[new_locked.end]
-        new_bias_sign = (bitwise_and(new_end_change.bias, UINT256_SIGN) > 0)
-        new_slope_sign = (bitwise_and(new_end_change.slope, UINT256_SIGN) > 0)
+        new_end_sign = (bitwise_and(new_end_change, UINT256_SIGN) == 0)
     else:
         new_end_change = old_end_change
+
+    # Bias/slope (unlike change in bias/slope) is always positive
+    _last_checkpoint: uint256 = self.last_checkpoint
+    last_point: Point = self.point_history[_last_checkpoint]
+
+    # Go over weeks to fill history and calculate what the current point is
+    ts_i: uint256 = (_last_checkpoint / WEEK) * WEEK
+    for i in range(255):
+        # Hopefully it won't happen that this won't get used in 5 years!
+        # If it does, users will be able to withdraw but vote weight will be broken
+        ts_i += WEEK
+        d_slope: uint256 = 0
+        if ts_i > ts:
+            ts_i = ts
+        else:
+            d_slope = self.slope_changes[ts_i]
+        d_bias: uint256 = last_point.slope * (ts_i - _last_checkpoint)
+        if d_bias >= last_point.bias:
+            # If there is a rounding off error
+            last_point.bias = 0
+        else:
+            last_point.bias -= d_bias
+        if bitwise_and(d_slope, UINT256_SIGN) == 0:
+            # +
+            last_point.slope += d_slope
+        else:
+            # -
+            d_slope = bitwise_xor(d_slope, UINT256_SIGN)
+            if d_slope <= last_point.slope:
+                last_point.slope -= d_slope
+            else:
+                last_point.slope = 0
+        _last_checkpoint = ts_i
+        if ts_i == ts:
+            break
+        else:
+            self.point_history[ts_i] = last_point
+
+    # XXX still need to include bias
+    # Now, add the current point and history
+    # TBC
+    # * Change current slope and record
+    # * Remove old change of the slope from point_changes
+    # * Add new change of slope to point_changes
 
 
 @public
