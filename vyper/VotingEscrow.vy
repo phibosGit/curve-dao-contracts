@@ -19,17 +19,19 @@ struct Point:
 
 struct LockedBalance:
     amount: uint256
-    before: timestamp
+    before: uint256
 
+
+WEEK: constant(uint256) = 7 * 86400  # All future times rounded by week
 
 token: public(address)
 supply: public(uint256)
 
 locked: public(map(address, LockedBalance))
-locked_history: public(map(address, map(timestamp, LockedBalance)))
+locked_history: public(map(address, map(uint256, LockedBalance)))
 
-checkpoints: public(map(timestamp, Point))
-last_checkpoint: timestamp
+checkpoints: public(map(uint256, Point))
+last_checkpoint: uint256
 
 
 @public
@@ -44,8 +46,9 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
 
 @public
 @nonreentrant('lock')
-def deposit(value: uint256, unlock_time: timestamp = 0):
+def deposit(value: uint256, _unlock_time: uint256 = 0):
     # Also used to extent locktimes
+    unlock_time: uint256 = (_unlock_time / WEEK) * WEEK
     _locked: LockedBalance = self.locked[msg.sender]
     old_supply: uint256 = self.supply
 
@@ -63,7 +66,7 @@ def deposit(value: uint256, unlock_time: timestamp = 0):
     if unlock_time > 0:
         _locked.before = unlock_time
     self.locked[msg.sender] = _locked
-    self.locked_history[msg.sender][block.timestamp] = _locked
+    self.locked_history[msg.sender][as_unitless_number(block.timestamp)] = _locked
 
     self._checkpoint(msg.sender, old_locked, _locked)
 
@@ -82,7 +85,7 @@ def withdraw(value: uint256):
     old_locked: LockedBalance = _locked
     _locked.amount -= value
     self.locked[msg.sender] = _locked
-    self.locked_history[msg.sender][block.timestamp] = _locked
+    self.locked_history[msg.sender][as_unitless_number(block.timestamp)] = _locked
     self.supply = old_supply - value
 
     self._checkpoint(msg.sender, old_locked, _locked)
