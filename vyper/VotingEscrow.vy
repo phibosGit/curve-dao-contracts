@@ -1,9 +1,32 @@
 from vyper.interfaces import ERC20
 
+# Voting escrow to have time-weighted votes
+# The idea: votes have a weight depending on time, so that users are committed
+# to the future of (whatever they are voting for).
+# The weight in this implementation is linear until some max time:
+# w ^
+# 1 +    /-----------------
+#   |   /
+#   |  /
+#   | /
+#   |/
+# 0 +----+--------------------> time
+#       maxtime (2 years?)
+
+struct Point:
+    bias: uint256
+    slope: uint256  # - dweight / dt * 1e18
+
+struct LockedBalance:
+    amount: uint256
+    before: timestamp
+
+
 token: public(address)
-balances: public(map(address, uint256))
-unlock_times: public(map(address, timestamp))
+locked: public(map(address, LockedBalance))
 supply: public(uint256)
+
+last_checkpoint: timestamp
 
 
 @public
@@ -21,40 +44,40 @@ def _checkpoint(addr: address, old_value: uint256, old_supply: uint256):
 @nonreentrant('lock')
 def deposit(value: uint256, unlock_time: timestamp = 0):
     # Also used to extent locktimes
-    old_unlock_time: timestamp = self.unlock_times[msg.sender]
-    old_value: uint256 = self.balances[msg.sender]
+    _locked: LockedBalance = self.locked[msg.sender]
     old_supply: uint256 = self.supply
 
     if unlock_time == 0:
-        assert old_value > 0, "No existing stake found"
-        assert old_unlock_time > block.timestamp, "Time to unstake"
+        assert _locked.amount > 0, "No existing stake found"
+        assert _locked.before> block.timestamp, "Time to unstake"
     else:
-        if old_value > 0:
-            assert unlock_time >= old_unlock_time, "Cannot make locktime smaller"
+        if _locked.amount > 0:
+            assert unlock_time >= _locked.before, "Cannot make locktime smaller"
         assert unlock_time > block.timestamp, "Can only lock until time in the future"
 
-    self._checkpoint(msg.sender, old_value, old_supply)
+    self._checkpoint(msg.sender, _locked.amount, old_supply)
 
-    self.balances[msg.sender] = old_value + value
     self.supply = old_supply + value
+    _locked.amount += value
     if unlock_time > 0:
-        self.unlock_times[msg.sender] = unlock_time
+        _locked.before = unlock_time
+    self.locked[msg.sender] = _locked
 
-    assert_modifiable(ERC20(self.token).transferFrom(msg.sender, self, value))
+    if value > 0:
+        assert_modifiable(ERC20(self.token).transferFrom(msg.sender, self, value))
     # XXX logs
 
 
 @public
 @nonreentrant('lock')
 def withdraw(value: uint256):
-    assert block.timestamp >= self.unlock_times[msg.sender]
-
-    old_value: uint256 = self.balances[msg.sender]
+    _locked: LockedBalance = self.locked[msg.sender]
+    assert block.timestamp >= _locked.before
     old_supply: uint256 = self.supply
 
-    self._checkpoint(msg.sender, old_value, old_supply)
+    self._checkpoint(msg.sender, _locked.amount, old_supply)
 
-    self.balances[msg.sender] = old_value - value
+    _locked.amount -= value
     self.supply = old_supply - value
 
     assert_modifiable(ERC20(self.token).transfer(msg.sender, value))
