@@ -23,16 +23,18 @@ struct LockedBalance:
 
 
 token: public(address)
-locked: public(map(address, LockedBalance))
 supply: public(uint256)
 
+locked: public(map(address, LockedBalance))
+locked_history: public(map(address, map(timestamp, LockedBalance)))
+
+checkpoints: public(map(timestamp, Point))
 last_checkpoint: timestamp
 
 
 @public
 def __init__(token_addr: address):
     self.token = token_addr
-    self.supply = 0
 
 
 @private
@@ -61,6 +63,7 @@ def deposit(value: uint256, unlock_time: timestamp = 0):
     if unlock_time > 0:
         _locked.before = unlock_time
     self.locked[msg.sender] = _locked
+    self.locked_history[msg.sender][block.timestamp] = _locked
 
     self._checkpoint(msg.sender, old_locked, _locked)
 
@@ -78,6 +81,8 @@ def withdraw(value: uint256):
 
     old_locked: LockedBalance = _locked
     _locked.amount -= value
+    self.locked[msg.sender] = _locked
+    self.locked_history[msg.sender][block.timestamp] = _locked
     self.supply = old_supply - value
 
     self._checkpoint(msg.sender, old_locked, _locked)
