@@ -86,7 +86,7 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
             ts_i = ts
         else:
             d_slope = self.slope_changes[ts_i]
-        d_bias: uint256 = last_point.slope * (ts_i - _last_checkpoint)
+        d_bias: uint256 = last_point.slope * (ts_i - _last_checkpoint) / 10 ** 18
         if d_bias >= last_point.bias:
             # If there is a rounding off error
             last_point.bias = 0
@@ -110,10 +110,55 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
 
     # XXX still need to include bias
     # Now, add the current point and history
-    # TBC
-    # * Change current slope and record
-    # * Remove old change of the slope from point_changes
-    # * Add new change of slope to point_changes
+    # old/new slope/bias are already zero if we end not in the future
+    last_point.slope += new_user_slope
+    if last_point.slope >= old_user_slope:
+        last_point.slope -= old_user_slope
+    else:
+        last_point.slope = 0
+
+    last_point.bias += new_user_bias
+    if last_point.bias >= old_user_bias:
+        last_point.bias -= old_user_bias
+    else:
+        last_point.bias = 0
+
+    self.point_history[ts] = last_point
+
+    # Slope going down is considered positive here (it actually always does, but
+    # delta can have either sign
+    # end comes, slope becomes smaller, so delta is negative
+    # We subtract new_user_slope from [new_locked.end]
+    # and add old_user_slope to [old_locked.end]
+    if old_locked.end > block.timestamp:
+        # old_end_change, old_end_sign (True if positive)
+        if old_end_sign:  # +
+            old_end_change += old_user_slope
+        else:  # -
+            old_end_change = bitwise_xor(old_end_change, UINT256_SIGN)
+            if old_user_slope <= old_end_change:
+                old_end_change -= old_user_slope
+                old_end_change = bitwise_xor(old_end_change, UINT256_SIGN)
+            else:
+                old_end_change = old_user_slope - old_end_change
+        if new_locked.end == old_locked.end:
+            new_end_change = old_end_change
+            # ... and we'll record a new one
+        else:
+            self.slope_changes[old_locked.end] = old_end_change
+
+    if new_locked.end > block.timestamp:  # check in withdraw maybe?
+        if new_end_sign:  # +
+            if new_user_slope <= new_end_change:
+                new_end_change -= new_user_slope
+            else:
+                new_end_change = new_user_slope - new_end_change
+                new_end_change = bitwise_xor(new_end_change, UINT256_SIGN)
+        else:  # -
+            new_end_change = bitwise_xor(new_end_change, UINT256_SIGN)
+            new_end_change += new_user_slope
+            new_end_change = bitwise_xor(new_end_change, UINT256_SIGN)
+        self.slope_changes[new_locked.end] = new_end_change
 
 
 @public
@@ -165,6 +210,7 @@ def withdraw(value: uint256):
     self.locked_history[msg.sender][as_unitless_number(block.timestamp)] = _locked
     self.supply = old_supply - value
 
+    # XXX check times
     self._checkpoint(msg.sender, old_locked, _locked)
 
     assert_modifiable(ERC20(self.token).transfer(msg.sender, value))
