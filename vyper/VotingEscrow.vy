@@ -14,18 +14,17 @@ from vyper.interfaces import ERC20
 #       maxtime (2 years?)
 
 struct Point:
-    bias: uint256
-    slope: uint256  # - dweight / dt * 1e18
+    bias: int128
+    slope: int128  # - dweight / dt * 1e18
     # upper bit in slope is reserved for the sign
 
 struct LockedBalance:
-    amount: uint256
+    amount: int128
     begin: uint256
     end: uint256
 
 
 WEEK: constant(uint256) = 7 * 86400  # All future times rounded by week
-UINT256_SIGN: constant(uint256) = 2 ** 255  # Ugh, I wish there was int256
 
 token: public(address)
 supply: public(uint256)
@@ -34,7 +33,7 @@ locked: public(map(address, LockedBalance))
 locked_history: public(map(address, map(uint256, LockedBalance)))
 
 point_history: public(map(uint256, Point))  # time -> unsigned point
-slope_changes: public(map(uint256, uint256))  # time -> signed slope change
+slope_changes: public(map(uint256, int128))  # time -> signed slope change
 last_checkpoint: uint256
 
 
@@ -46,30 +45,22 @@ def __init__(token_addr: address):
 
 @private
 def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBalance):
-    old_user_bias: uint256 = 0
-    old_user_slope: uint256 = 0
-    new_user_bias: uint256 = 0
-    new_user_slope: uint256 = 0
-    ts: uint256 = as_unitless_number(block.timestamp)
-    old_end_change: uint256 = 0
-    new_end_change: uint256 = 0
+    u_old: Point = Point({bias: 0, slope: 0})
+    u_new: Point = Point({bias: 0, slope: 0})
+    t: uint256 = as_unitless_number(block.timestamp)
     if old_locked.amount > 0 and old_locked.end > block.timestamp and old_locked.end > old_locked.begin:
-        old_user_slope = 10 ** 18 * old_locked.amount / (old_locked.end - old_locked.begin)
-        old_user_bias = old_user_slope * (old_locked.end - ts) / 10 ** 18
+        u_old.slope = old_locked.amount / convert(old_locked.end - old_locked.begin, int128)
+        old_user_bias = u_old.slope * convert(old_locked.end - t, int128)
     if new_locked.amount > 0 and new_locked.end > block.timestamp and new_locked.end > new_locked.begin:
-        new_user_slope = 10 ** 18 * new_locked.amount / (new_locked.end - new_locked.begin)
-        new_user_bias = new_user_slope * (new_locked.end - ts) / 10 ** 18
+        u_new.slope = new_locked.amount / convert(new_locked.end - new_locked.begin, int128)
+        u_new.bias = u_new.slope * convert(new_locked.end - ts, int128)
 
-    # Some workaround for not having signed int256...
-    # old_end_change and new_end_change are signed changes in slope
-    old_end_change = self.point_changes[old_locked.end]
-    old_end_sign: bool = (bitwise_and(old_end_change, UINT256_SIGN) == 0)
-    new_end_sign: bool = old_end_sign
+    old_dslope: int128 = self.slope_changes[old_locked.end]
+    new_dslope: int128 = 0
     if new_locked.end != old_locked.end:
-        new_end_change = self.point_changes[new_locked.end]
-        new_end_sign = (bitwise_and(new_end_change, UINT256_SIGN) == 0)
+        new_dslope = self.slope_changes[new_locked.end]
     else:
-        new_end_change = old_end_change
+        new_dslope = old_dslope
 
     # Bias/slope (unlike change in bias/slope) is always positive
     _last_checkpoint: uint256 = self.last_checkpoint
@@ -81,46 +72,29 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
         # Hopefully it won't happen that this won't get used in 5 years!
         # If it does, users will be able to withdraw but vote weight will be broken
         ts_i += WEEK
-        d_slope: uint256 = 0
+        d_slope: int128 = 0
         if ts_i > ts:
             ts_i = ts
         else:
             d_slope = self.slope_changes[ts_i]
-        d_bias: uint256 = last_point.slope * (ts_i - _last_checkpoint) / 10 ** 18
-        if d_bias >= last_point.bias:
-            # If there is a rounding off error
+        last_point.bias -= last_point.slope * convert(ts_i - last_checkpoint, int128)
+        last_point.slope += d_slope
+        if last_point.bias < 0:
             last_point.bias = 0
-        else:
-            last_point.bias -= d_bias
-        if bitwise_and(d_slope, UINT256_SIGN) == 0:
-            # +
-            last_point.slope += d_slope
-        else:
-            # -
-            d_slope = bitwise_xor(d_slope, UINT256_SIGN)
-            if d_slope <= last_point.slope:
-                last_point.slope -= d_slope
-            else:
-                last_point.slope = 0
+        if last_point.slope < 0:
+            last_point.slope = 0
         _last_checkpoint = ts_i
         if ts_i == ts:
             break
         else:
             self.point_history[ts_i] = last_point
 
-    # XXX still need to include bias
-    # Now, add the current point and history
-    # old/new slope/bias are already zero if we end not in the future
-    last_point.slope += new_user_slope
-    if last_point.slope >= old_user_slope:
-        last_point.slope -= old_user_slope
-    else:
+    # XXX still need to account for locking > 2 yr
+    last_point.slope += (u_new.slope - u_old.slope)
+    last_point.bias += (u_new.bias - u_old.bias)
+    if last_point.slope < 0:
         last_point.slope = 0
-
-    last_point.bias += new_user_bias
-    if last_point.bias >= old_user_bias:
-        last_point.bias -= old_user_bias
-    else:
+    if last_point.bias < 0:
         last_point.bias = 0
 
     self.point_history[ts] = last_point
@@ -131,40 +105,19 @@ def _checkpoint(addr: address, old_locked: LockedBalance, new_locked: LockedBala
     # We subtract new_user_slope from [new_locked.end]
     # and add old_user_slope to [old_locked.end]
     if old_locked.end > block.timestamp:
-        # old_end_change, old_end_sign (True if positive)
-        if old_end_sign:  # +
-            old_end_change += old_user_slope
-        else:  # -
-            old_end_change = bitwise_xor(old_end_change, UINT256_SIGN)
-            if old_user_slope <= old_end_change:
-                old_end_change -= old_user_slope
-                old_end_change = bitwise_xor(old_end_change, UINT256_SIGN)
-            else:
-                old_end_change = old_user_slope - old_end_change
-        if new_locked.end == old_locked.end:
-            new_end_change = old_end_change
-            # ... and we'll record a new one
-        else:
-            self.slope_changes[old_locked.end] = old_end_change
+        old_dslope += (u_old.slope - u_new.slope)
+        if new_locked.end != old_locked.end:
+            self.slope_changes[old_locked.end] = old_dslope
 
     if new_locked.end > block.timestamp:  # check in withdraw maybe?
-        if new_end_sign:  # +
-            if new_user_slope <= new_end_change:
-                new_end_change -= new_user_slope
-            else:
-                new_end_change = new_user_slope - new_end_change
-                new_end_change = bitwise_xor(new_end_change, UINT256_SIGN)
-        else:  # -
-            new_end_change = bitwise_xor(new_end_change, UINT256_SIGN)
-            new_end_change += new_user_slope
-            new_end_change = bitwise_xor(new_end_change, UINT256_SIGN)
-        self.slope_changes[new_locked.end] = new_end_change
+        new_dslope -= (u_new.slope - u_old.slope)
+        self.slope_changes[new_locked.end] = new_dslope
 
 
 @public
 @nonreentrant('lock')
 def deposit(value: uint256, _unlock_time: uint256 = 0):
-    # Also used to extent locktimes
+    # Also used to extend locktimes
     unlock_time: uint256 = (_unlock_time / WEEK) * WEEK
     _locked: LockedBalance = self.locked[msg.sender]
     old_supply: uint256 = self.supply
@@ -184,7 +137,7 @@ def deposit(value: uint256, _unlock_time: uint256 = 0):
     if _locked.amount == 0:
         _locked.begin = as_unitless_number(block.timestamp)
     self.supply = old_supply + value
-    _locked.amount += value
+    _locked.amount += convert(value, int128)
     if unlock_time > 0:
         _locked.end = unlock_time
     self.locked[msg.sender] = _locked
@@ -205,7 +158,8 @@ def withdraw(value: uint256):
     old_supply: uint256 = self.supply
 
     old_locked: LockedBalance = _locked
-    _locked.amount -= value
+    _locked.amount -= convert(value, int128)
+    assert _locked.amount >= 0, "Withdrawing more than you have"
     self.locked[msg.sender] = _locked
     self.locked_history[msg.sender][as_unitless_number(block.timestamp)] = _locked
     self.supply = old_supply - value
