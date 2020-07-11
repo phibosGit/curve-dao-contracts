@@ -9,7 +9,7 @@ interface CRV20:
 interface Controller:
     def period() -> int128: view
     def period_write() -> int128: nonpayable
-    def period_timestamp(p: int128) -> uint256: view
+    def get_period_timestamp(p: int128) -> uint256: view
     def gauge_relative_weight(addr: address, _period: int128) -> uint256: view
     def gauge_relative_weight_write(addr: address) -> uint256: nonpayable
     def voting_escrow() -> address: view
@@ -86,7 +86,7 @@ def __init__(lp_addr: address, _minter: address):
     period: int128 = Controller(controller_addr).period()
     self.voting_escrow = Controller(controller_addr).voting_escrow()
     self.last_period = period
-    self.period_checkpoints[period] = Controller(controller_addr).period_timestamp(period)
+    self.period_checkpoints[period] = Controller(controller_addr).get_period_timestamp(period)
     self.inflation_rate = CRV20(crv_addr).rate()
 
 
@@ -117,7 +117,7 @@ def _checkpoint(addr: address):
     _token: address = self.crv_token
     _controller: address = self.controller
     old_period: int128 = self.last_period
-    old_period_time: uint256 = Controller(_controller).period_timestamp(old_period)
+    old_period_time: uint256 = Controller(_controller).get_period_timestamp(old_period)
     new_epoch: uint256 = CRV20(_token).start_epoch_time_write()
     last_weight: uint256 = Controller(_controller).gauge_relative_weight_write(self)  # Normalized to 1e18
     new_period: int128 = Controller(_controller).period()
@@ -137,7 +137,7 @@ def _checkpoint(addr: address):
         for i in range(500):
             w = Controller(_controller).gauge_relative_weight(self, p)
             p += 1
-            new_period_time: uint256 = Controller(_controller).period_timestamp(p)
+            new_period_time: uint256 = Controller(_controller).get_period_timestamp(p)
             if _integrate_checkpoint >= new_period_time:
                 # This would never happen, but if we don't do this, it'd suck if it does
                 dt = 0

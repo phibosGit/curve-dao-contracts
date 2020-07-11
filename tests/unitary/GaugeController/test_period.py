@@ -18,7 +18,7 @@ def test_period_timestamps(accounts, rpc, gauge_controller):
     # Check that no timestamps are missed and everything is incremental
     prev_ts = 0
     for i in range(gauge_controller.period()):
-        ts = gauge_controller.period_timestamp(i)
+        ts = gauge_controller.get_period_timestamp(i)
         assert ts > 0
         assert ts >= prev_ts
         prev_ts = ts

@@ -73,7 +73,7 @@ gauge_type_names: public(HashMap[int128, String[64]])
 # Period is guaranteed to not have a change of epoch (e.g. mining rate) in the
 # middle of it
 period: public(int128)
-period_timestamp: public(HashMap[int128, uint256])
+period_timestamp: uint256[100000000000000000000000000000]
 
 # Needed for enumeration
 gauges: public(address[1000000000])
@@ -417,3 +417,9 @@ def last_change() -> uint256:
 @view
 def get_total_weight() -> uint256:
     return self.total_weight[self.period]
+
+
+@external
+@view
+def get_period_timestamp(p: int128) -> uint256:
+    return self.period_timestamp[p]
